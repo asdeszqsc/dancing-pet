@@ -31,6 +31,8 @@ let kDanceGapMin = 600             // 댄스 간 간격 최소 20초
 let kDanceGapMax = 900             // 최대 30초
 let kFallbackEmoji = "🐱"
 let kPrefKey = "selectedCharacter"
+// 개발 모드: DP_DEV=1 로 실행하면 손쉬운 사용 권한 없이 가짜 Dock(파란 띠)로 climb 확인 가능
+let kDevMode = ProcessInfo.processInfo.environment["DP_DEV"] != nil
 
 // MARK: - 스프라이트 로딩
 func loadFrames(_ rel: String) -> [NSImage] {
@@ -332,6 +334,15 @@ final class CharacterView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // 개발 모드: Dock 범위를 파란 띠로 시각화 (climb 정렬 확인용)
+        if kDevMode && dockValid, let dctx = NSGraphicsContext.current?.cgContext {
+            let band = CGRect(x: dockLeft, y: 0, width: dockRight - dockLeft, height: dockTopY)
+            dctx.setFillColor(NSColor.systemBlue.withAlphaComponent(0.15).cgColor)
+            dctx.fill(band)
+            dctx.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.6).cgColor)
+            dctx.setLineWidth(2)
+            dctx.stroke(band.insetBy(dx: 1, dy: 1))
+        }
         guard hasSprites else { drawEmojiFallback(baseY: feetY); return }
 
         var img: NSImage?
@@ -491,8 +502,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
 
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(opts)
+        if !kDevMode {   // dev 모드에선 권한 팝업 생략 (가짜 Dock 사용)
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+        }
         readDock()
     }
 
@@ -557,6 +570,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func readDock() {
+        if kDevMode {   // 화면 하단 중앙에 가짜 Dock 하나 고정 (권한/실제 Dock 불필요)
+            let w = characterView.bounds.width
+            let dockW = min(360, w * 0.4)
+            let cx = w / 2
+            characterView.setDock(valid: true, left: cx - dockW / 2, right: cx + dockW / 2, topY: 70)
+            return
+        }
         guard AXIsProcessTrusted() else { characterView.setDock(valid: false); return }
         guard let dock = NSRunningApplication
                 .runningApplications(withBundleIdentifier: "com.apple.dock").first else {

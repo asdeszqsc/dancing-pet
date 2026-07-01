@@ -6,6 +6,10 @@
 /DancingPet.app/
 /DancingPet.zip
 
+# dev.sh 핫리로드 바이너리
+/.dev-dancing-pet
+/.dev-dancing-pet.new
+
 # 개발용 스크래치/참고 이미지
 /scratch/
 
