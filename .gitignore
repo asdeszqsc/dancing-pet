@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# 빌드 산출물 (build_app.sh 로 재생성됨)
+/dancing-pet
+/DancingPet.app/
+/DancingPet.zip
+
+# 개발용 스크래치/참고 이미지
+/scratch/
+
+# Claude Code 로컬 설정
+.claude/settings.local.json
