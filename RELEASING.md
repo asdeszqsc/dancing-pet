@@ -9,24 +9,25 @@
 
 ```sh
 # 1) 버전 3곳을 같은 값으로 올린다
-#    - tauri/src-tauri/tauri.conf.json  ("version")   ← 앱/업데이터 기준
+#    - tauri/src-tauri/tauri.conf.json  ("version")   ← 앱/업데이터/릴리스 기준
 #    - tauri/src-tauri/Cargo.toml       ([package] version)
 #    - tauri/package.json               ("version")
 # 2) Cargo.lock 갱신
 cd tauri/src-tauri && cargo check      # Cargo.lock 의 tauri 버전 동기화
-# 3) 커밋
+# 3) 커밋 + main 푸시 — 끝 (태그는 CI 가 만든다)
 git commit -am "Bump version to X.Y.Z"
-# 4) 태그 푸시 → GitHub Actions 가 자동 빌드 + 릴리스 발행
-git tag vX.Y.Z
-git push origin <branch> --tags
+git push origin main
+# 로컬 태그 동기화가 필요하면: git fetch --tags
 ```
 
-푸시 후 자동으로:
+main 푸시 후 자동으로 (버전 태그 `v<version>` 이 아직 없을 때):
 - macOS(universal) + Windows 러너에서 릴리스 빌드
-- GitHub 릴리스 **자동 발행**(초안 아님) — 태그 이름으로
+- 태그 `v<version>` 생성 + GitHub 릴리스 **자동 발행**(초안 아님)
 - 자산 첨부: `.dmg`(mac), `.msi`/`-setup.exe`(win), 각 `.sig` 서명, `latest.json`(업데이터용)
 - **Homebrew tap 자동 갱신** — `brew` 잡이 `asdeszqsc/homebrew-tap` 의
   `Casks/dancing-pet.rb` 의 version/sha256 을 새 `.dmg` 기준으로 bump (secret `TAP_GITHUB_TOKEN`)
+
+버전을 올리지 않은 main 푸시는 **빌드만** 한다 (컴파일 검증 + Rust 캐시 웜업 — 릴리스 빌드가 이 캐시를 재사용해 ~3분대).
 
 > ⚠️ 업데이트가 감지되려면 **새 버전 > 설치된 버전**이어야 함. 버전은 `tauri.conf.json` 의 `version` 이 기준(태그 문자열이 아님).
 
@@ -35,8 +36,10 @@ git push origin <branch> --tags
 ## 파이프라인
 
 - 정의: [`.github/workflows/build.yml`](.github/workflows/build.yml)
-- 트리거: `v*` 태그 push (릴리스 발행) / `main` push (빌드만 — 컴파일 검증 + Rust 캐시 웜업) / `workflow_dispatch`(수동, 빌드만)
-- 캐시: GitHub Actions 캐시는 "자기 ref + 기본 브랜치" 것만 복원 가능 → 태그 릴리스 빌드는 **main 의 캐시**를 재사용한다. main 에 한동안 push 가 없어 캐시가 만료(7일)되면 첫 빌드는 다시 콜드(~10분).
+- 트리거: `main` push 단일 경로 — `version` 잡이 `tauri.conf.json` 의 버전 태그 존재 여부로
+  릴리스 발행 여부를 결정. `workflow_dispatch` 는 수동 빌드(릴리스 없음).
+- 캐시: 모든 런이 main ref 라 Rust 캐시가 항상 재사용된다 (콜드 ~10분 → 웜 ~3분).
+  main 에 7일간 push 가 없으면 캐시 만료로 첫 빌드만 다시 콜드.
 - 매트릭스:
   - `macos-latest` → `--target universal-apple-darwin` (Intel+ARM)
   - `windows-latest` → 기본 (x64)
@@ -45,7 +48,8 @@ git push origin <branch> --tags
 - 산출물 경로(CI): `tauri/src-tauri/target/**/release/bundle/**`
 
 ### 수동 실행
-Actions 탭 → **build** → *Run workflow*. 단 **릴리스 발행은 태그 푸시일 때만**(`tagName` 조건).
+Actions 탭 → **build** → *Run workflow*. 수동 실행은 **항상 빌드만** 한다
+(릴리스 발행은 main `push` 이벤트에서만).
 
 ---
 

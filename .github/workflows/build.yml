@@ -1,21 +1,41 @@
 name: build
 
+# main push 가 유일한 릴리스 경로:
+#   tauri.conf.json 의 version 에 해당하는 태그(v<version>)가 없으면
+#   빌드 → 태그 생성 → 릴리스 발행 → Homebrew cask bump 까지 자동.
+#   이미 릴리스된 버전이면 빌드만 (컴파일 검증 + Rust 캐시 웜업).
 on:
   push:
-    tags: ["v*"]
-    # main push 는 컴파일 검증 + Rust 캐시 웜업 (릴리스 발행은 태그일 때만).
-    # GitHub 캐시는 "자기 ref + 기본 브랜치" 것만 복원 가능 → 태그 릴리스 빌드가
-    # 빨라지려면 main 에 캐시가 있어야 한다.
     branches: ["main"]
-  workflow_dispatch:
+  workflow_dispatch: # 수동 빌드 (릴리스 발행 없음)
 
-# 같은 브랜치의 연속 push 는 이전 빌드 취소 (태그/릴리스 런은 취소 안 함)
+# 릴리스가 중간에 끊기지 않게 취소 대신 직렬화
 concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: build-main
+  cancel-in-progress: false
 
 jobs:
+  # 릴리스 여부 판단: push 이벤트 + v<version> 태그가 아직 없을 때만 발행
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          V="$(jq -r .version tauri/src-tauri/tauri.conf.json)"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "push" ] && \
+             ! git ls-remote --exit-code --tags origin "v$V" > /dev/null 2>&1; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: version
     permissions:
       contents: write
     strategy:
@@ -44,8 +64,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: tauri/src-tauri
-          # 태그 ref 에 저장된 캐시는 이후 어떤 런도 복원 못 하므로 저장 생략
-          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Install frontend deps
         working-directory: tauri
@@ -61,9 +79,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: tauri
-          # 태그 푸시면 릴리스 자동 발행(초안 아님) → updater 의 releases/latest 가 동작
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: "DancingPet ${{ github.ref_name }}"
+          # 새 버전이면 태그 v<version> 생성 + 릴리스 발행(초안 아님), 아니면 빌드만
+          tagName: ${{ needs.version.outputs.release == 'true' && format('v{0}', needs.version.outputs.version) || '' }}
+          releaseName: ${{ needs.version.outputs.release == 'true' && format('DancingPet v{0}', needs.version.outputs.version) || '' }}
           releaseDraft: false
           args: ${{ matrix.args }}
 
@@ -78,23 +96,23 @@ jobs:
             tauri/src-tauri/target/**/release/bundle/**/*.msi
             tauri/src-tauri/target/**/release/bundle/**/*-setup.exe
 
-  # 태그 릴리스 발행 후 Homebrew tap(asdeszqsc/homebrew-tap) cask 를 새 버전으로
+  # 릴리스 발행 후 Homebrew tap(asdeszqsc/homebrew-tap) cask 를 새 버전으로
   # 자동 갱신 → macOS 유저는 `brew upgrade --cask dancing-pet` 로 업데이트.
   # TAP_GITHUB_TOKEN: homebrew-tap 에 push 가능한 토큰 (기본 GITHUB_TOKEN 은 이 repo 전용)
   brew:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    if: needs.version.outputs.release == 'true'
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - name: Bump cask version/sha256
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
           DMG="DancingPet_${VERSION}_universal.dmg"
           curl -fsSL -o "$DMG" \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${DMG}"
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${DMG}"
           SHA="$(sha256sum "$DMG" | cut -d' ' -f1)"
           git clone --depth 1 \
             "https://x-access-token:${TAP_TOKEN}@github.com/asdeszqsc/homebrew-tap.git" tap
