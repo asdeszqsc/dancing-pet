@@ -10,7 +10,8 @@ echo "▶︎ .app 번들 구성: $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp dancing-pet "$APP/Contents/MacOS/DancingPet"
-cp -R assets "$APP/Contents/Resources/assets"
+cp -R ../assets "$APP/Contents/Resources/assets"   # assets는 repo 루트(공유)
+[ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,6 +22,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key>     <string>DancingPet</string>
   <key>CFBundleIdentifier</key>      <string>com.example.dancingpet</string>
   <key>CFBundleExecutable</key>      <string>DancingPet</string>
+  <key>CFBundleIconFile</key>        <string>AppIcon</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
   <key>CFBundleShortVersionString</key> <string>1.0</string>
   <key>CFBundleVersion</key>         <string>1</string>

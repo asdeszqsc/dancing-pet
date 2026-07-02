@@ -33,6 +33,9 @@ let kFallbackEmoji = "🐱"
 let kPrefKey = "selectedCharacter"
 // 개발 모드: DP_DEV=1 로 실행하면 손쉬운 사용 권한 없이 가짜 Dock(파란 띠)로 climb 확인 가능
 let kDevMode = ProcessInfo.processInfo.environment["DP_DEV"] != nil
+let kAppVersion = "1.0.0"
+// idle 종별 선택 가중치 (idle1 숨쉬기가 가장 자주). 폴더 개수보다 적으면 나머지는 1.0
+let kIdleWeights: [Double] = [7, 1.5, 1.5]
 
 // MARK: - 스프라이트 로딩
 func loadFrames(_ rel: String) -> [NSImage] {
@@ -309,6 +312,20 @@ final class CharacterView: NSView {
         needsDisplay = true
     }
 
+    /// idle 종을 가중치(kIdleWeights)대로 선택 — idle1이 가장 자주 나오도록
+    private func weightedIdleIndex() -> Int {
+        let n = idleList.count
+        guard n > 0 else { return 0 }
+        let weights = (0..<n).map { $0 < kIdleWeights.count ? kIdleWeights[$0] : 1.0 }
+        let total = weights.reduce(0, +)
+        var r = Double.random(in: 0..<total)
+        for (i, w) in weights.enumerated() {
+            if r < w { return i }
+            r -= w
+        }
+        return n - 1
+    }
+
     private func pickBehavior(minX: CGFloat, maxX: CGFloat) {
         let nearLeft  = posX <= minX + 12
         let nearRight = posX >= maxX - 12
@@ -317,8 +334,8 @@ final class CharacterView: NSView {
         if !nearRight { choices += [.walkRight, .walkRight] }
         behavior = choices.randomElement() ?? .idle
         if behavior == .idle {
-            // idle 종 랜덤 선택 + 동작이 정수 횟수만큼 끝까지 재생되도록 길이 맞춤
-            if !idleList.isEmpty { currentIdle = Int.random(in: 0..<idleList.count) }
+            // idle 종 가중 선택(idle1 위주) + 동작이 정수 횟수만큼 끝까지 재생되도록 길이 맞춤
+            if !idleList.isEmpty { currentIdle = weightedIdleIndex() }
             idleTick = 0
             let reps = [3, 3, 2]   // idle1(숨쉬기)/idle2(푸쉬업)/idle3(물마시기) 반복
             let cyc = max(1, (idleList.indices.contains(currentIdle) ? idleList[currentIdle].count : 10) * kIdleFrameEvery)
@@ -618,6 +635,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = "🎵"
 
         let menu = NSMenu()
+        let about = NSMenuItem(title: "DancingPet 정보 (About)", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "캐릭터 (Character)", action: nil, keyEquivalent: ""))
         for (i, def) in kCharacters.enumerated() {
             let item = NSMenuItem(title: "  " + def.title,
@@ -630,6 +651,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "종료 (Quit)",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? kAppVersion
+        let para = NSMutableParagraphStyle(); para.alignment = .center
+        let credits = NSAttributedString(
+            string: "메뉴바에서 춤추는 데스크톱 펫 와비(Waabi)\n\ngithub.com/asdeszqsc/dancing-pet",
+            attributes: [.font: NSFont.systemFont(ofSize: 11),
+                         .foregroundColor: NSColor.secondaryLabelColor,
+                         .paragraphStyle: para])
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "DancingPet",
+            .applicationVersion: ver,
+            .credits: credits,
+        ])
     }
 
     @objc private func selectCharacter(_ sender: NSMenuItem) {

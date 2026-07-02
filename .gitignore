@@ -1,14 +1,31 @@
 # macOS
 .DS_Store
 
-# 빌드 산출물 (build_app.sh 로 재생성됨)
+# ── macOS Swift 앱 (macos-swift/) 빌드 산출물 ──
+# build_app.sh / dev.sh 로 재생성됨
+macos-swift/dancing-pet
+macos-swift/DancingPet.app/
+macos-swift/DancingPet.zip
+macos-swift/.dev-dancing-pet
+macos-swift/.dev-dancing-pet.new
+# 아이콘 중간 산출물 (gen_icon.swift 로 재생성, AppIcon.icns 는 커밋)
+macos-swift/icon_1024.png
+
+# 루트에 남아있을 수 있는 구버전 산출물
 /dancing-pet
 /DancingPet.app/
 /DancingPet.zip
-
-# dev.sh 핫리로드 바이너리
 /.dev-dancing-pet
 /.dev-dancing-pet.new
+/icon_1024.png
+
+# ── Tauri / Rust / Node (tauri/) ──
+tauri/node_modules/
+tauri/dist/
+tauri/src-tauri/target/
+tauri/src-tauri/gen/
+# sync-assets 로 루트 assets/waabi 에서 복사됨 (생성물)
+tauri/public/waabi/
 
 # 개발용 스크래치/참고 이미지
 /scratch/

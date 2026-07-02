@@ -1,0 +1,24 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+#pet-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  /* 픽셀 아트 또렷하게 (waabi smooth=false) */
+  image-rendering: pixelated;
+}

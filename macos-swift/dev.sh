@@ -32,7 +32,8 @@ compile() {
   rm -f "$BIN.new"; return 1
 }
 
-regen() { echo "▶︎ 스프라이트 재생성 (gen_waabi.swift)…"; swift gen_waabi.swift >/dev/null; }
+# gen_waabi.swift는 repo 루트에 있고 cwd/assets/waabi 로 출력 → 루트에서 실행
+regen() { echo "▶︎ 스프라이트 재생성 (gen_waabi.swift)…"; ( cd .. && swift gen_waabi.swift >/dev/null ); }
 
 # 최초 1회: 스프라이트 생성 + 컴파일 + 실행
 regen
