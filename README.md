@@ -28,11 +28,29 @@ open -a DancingPet
 
 ## 소스에서 빌드
 
+프로젝트는 두 구현으로 나뉩니다:
+- **`tauri/`** — 크로스플랫폼(macOS + Windows) Tauri 앱 (현행)
+- **`macos-swift/`** — 초기 macOS 전용 Swift 앱 (레거시)
+- 스프라이트 원본 `assets/`, 생성기 `gen_waabi.swift` 는 루트에서 공유
+
+### 크로스플랫폼 (Tauri)
+
 ```sh
-swift gen_waabi.swift   # 스프라이트(assets/waabi) 생성
-./build_app.sh          # 컴파일 + DancingPet.app 번들 구성
-open DancingPet.app
+cd tauri
+npm install
+npm run tauri dev      # 개발 (핫리로드)
+npm run tauri build    # 릴리스 빌드
 ```
+
+### macOS Swift (레거시)
+
+```sh
+swift gen_waabi.swift              # 스프라이트(assets/waabi) 생성 — 루트에서 실행
+cd macos-swift && ./build_app.sh   # 컴파일 + DancingPet.app 번들 구성
+open macos-swift/DancingPet.app
+```
+
+> 배포 · 릴리스 · 자동 업데이트 프로세스는 **[RELEASING.md](RELEASING.md)** 참고.
 
 ## 캐릭터 추가
 
