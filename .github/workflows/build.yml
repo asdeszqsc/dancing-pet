@@ -45,12 +45,15 @@ jobs:
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 업데이트 아티팩트 서명 (자동 업데이트용)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: tauri
-          # 태그 푸시면 드래프트 릴리스 생성, 그 외(수동 실행)엔 빌드만
+          # 태그 푸시면 릴리스 자동 발행(초안 아님) → updater 의 releases/latest 가 동작
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: "DancingPet ${{ github.ref_name }}"
-          releaseDraft: true
+          releaseDraft: false
           args: ${{ matrix.args }}
 
       - name: Upload artifacts

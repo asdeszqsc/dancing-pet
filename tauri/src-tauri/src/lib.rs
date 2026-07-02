@@ -56,6 +56,12 @@ fn set_click_through(window: WebviewWindow, through: bool) {
     let _ = window.set_ignore_cursor_events(through);
 }
 
+/// 프론트에서 OS 분기(자동 업데이트는 Windows 만) 용
+#[tauri::command]
+fn get_os() -> &'static str {
+    std::env::consts::OS
+}
+
 #[tauri::command]
 fn place_on_display(window: WebviewWindow, state: State<'_, AppState>, idx: usize) {
     let i = apply_display(&window, idx);
@@ -67,10 +73,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             display_index: Mutex::new(0),
         })
-        .invoke_handler(tauri::generate_handler![set_click_through, place_on_display])
+        .invoke_handler(tauri::generate_handler![set_click_through, place_on_display, get_os])
         .setup(|app| {
             let win = app.get_webview_window("main").expect("main window missing");
             // 데스크톱 위 클릭통과 오버레이 (커서가 캐릭터 위일 때만 프론트가 해제)
