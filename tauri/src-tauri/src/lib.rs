@@ -1,9 +1,10 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, LogicalPosition, LogicalSize, Manager, Monitor, State, WebviewWindow,
+    Emitter, Manager, Monitor, State, WebviewWindow,
 };
 
 mod platform;
@@ -11,6 +12,8 @@ mod platform;
 /// 현재 배치된 디스플레이 인덱스 (available_monitors 를 x좌표로 정렬한 순서)
 struct AppState {
     display_index: Mutex<usize>,
+    /// 캐릭터가 잡혀(드래그) 있는 동안 true — 커서 폴링 스레드가 크로스모니터 이동에 사용
+    grabbed: AtomicBool,
 }
 
 /// 모니터들을 화면 왼쪽→오른쪽(x) 순으로 정렬 (main.swift 의 screensSorted 와 동일 개념)
@@ -20,9 +23,69 @@ fn sorted_monitors(win: &WebviewWindow) -> Vec<Monitor> {
     ms
 }
 
+// ── 전역 비교좌표계 ──
+// 커서·모니터·창 위치를 서로 비교하려면 같은 공간이어야 하는데 tao 의 "물리좌표"는
+// macOS 에서 커서=Cocoa포인트×주모니터scale, 모니터/창=포인트×각자scale 로 제각각이다.
+// → macOS 는 논리(포인트) 공간으로 되돌려 비교, Windows 는 가상 스크린 물리픽셀 그대로.
+
+/// 전역 커서 위치 (비교좌표계)
+#[cfg(target_os = "macos")]
+fn cursor_global(win: &WebviewWindow) -> Option<(f64, f64)> {
+    let c = win.cursor_position().ok()?;
+    let ps = win.primary_monitor().ok().flatten()?.scale_factor();
+    Some((c.x / ps, c.y / ps))
+}
+#[cfg(not(target_os = "macos"))]
+fn cursor_global(win: &WebviewWindow) -> Option<(f64, f64)> {
+    let c = win.cursor_position().ok()?;
+    Some((c.x, c.y))
+}
+
+/// 모니터 rect (비교좌표계) → (x, y, w, h)
+#[cfg(target_os = "macos")]
+fn monitor_rect_global(m: &Monitor) -> (f64, f64, f64, f64) {
+    let s = m.scale_factor();
+    let p = m.position().to_logical::<f64>(s);
+    let sz = m.size().to_logical::<f64>(s);
+    (p.x, p.y, sz.width, sz.height)
+}
+#[cfg(not(target_os = "macos"))]
+fn monitor_rect_global(m: &Monitor) -> (f64, f64, f64, f64) {
+    let p = m.position();
+    let sz = m.size();
+    (p.x as f64, p.y as f64, sz.width as f64, sz.height as f64)
+}
+
+/// 커서의 창-로컬 CSS px 좌표 (webview 의 clientX/Y 와 같은 공간)
+#[cfg(target_os = "macos")]
+fn cursor_local(win: &WebviewWindow) -> Option<(f64, f64)> {
+    let (cx, cy) = cursor_global(win)?;
+    let wp = win.outer_position().ok()?;
+    let ws = win.scale_factor().ok()?;
+    Some((cx - wp.x as f64 / ws, cy - wp.y as f64 / ws))
+}
+#[cfg(not(target_os = "macos"))]
+fn cursor_local(win: &WebviewWindow) -> Option<(f64, f64)> {
+    let c = win.cursor_position().ok()?;
+    let wp = win.outer_position().ok()?;
+    let ws = win.scale_factor().ok()?;
+    Some(((c.x - wp.x as f64) / ws, (c.y - wp.y as f64) / ws))
+}
+
+/// 전역 커서가 있는 모니터 인덱스 (sorted_monitors 순서)
+fn monitor_under_cursor(win: &WebviewWindow, ms: &[Monitor]) -> Option<usize> {
+    let (cx, cy) = cursor_global(win)?;
+    ms.iter().position(|m| {
+        let (x, y, w, h) = monitor_rect_global(m);
+        cx >= x && cx < x + w && cy >= y && cy < y + h
+    })
+}
+
 /// 창을 해당 모니터 전체로 맞춤. 혼합 DPI 대응: 물리픽셀을 그 모니터의 scale 로
 /// logical 로 변환해 set_position/set_size (Phase 1 에서 물리픽셀 직접 지정 시 어긋났음).
+#[cfg(target_os = "macos")]
 fn fit_to_monitor(win: &WebviewWindow, m: &Monitor) {
+    use tauri::{LogicalPosition, LogicalSize};
     let scale = m.scale_factor();
     let p = m.position().to_logical::<f64>(scale);
     let s = m.size().to_logical::<f64>(scale);
@@ -38,6 +101,14 @@ fn fit_to_monitor(win: &WebviewWindow, m: &Monitor) {
             let _ = win.set_position(LogicalPosition::new(p.x, actual_top));
         }
     }
+}
+
+/// Windows: 모니터 rect 가 물리픽셀 그대로라 직접 지정이 정확하다.
+/// (논리좌표로 주면 tauri 가 "이동 전 창 scale" 로 환산해 혼합 DPI 에서 어긋남)
+#[cfg(not(target_os = "macos"))]
+fn fit_to_monitor(win: &WebviewWindow, m: &Monitor) {
+    let _ = win.set_position(*m.position());
+    let _ = win.set_size(*m.size());
 }
 
 /// idx 번째(정렬순) 모니터에 배치. 실제 적용된 인덱스를 반환.
@@ -68,6 +139,15 @@ fn place_on_display(window: WebviewWindow, state: State<'_, AppState>, idx: usiz
     *state.display_index.lock().unwrap() = i;
 }
 
+/// 캐릭터 잡기/놓기 알림 — 잡혀있는 동안 커서 폴링이 크로스모니터 창 이동을 수행
+/// (main.swift 의 mouseDragged→ensureScreen 포팅)
+#[tauri::command]
+fn set_grabbed(state: State<'_, AppState>, grabbed: bool) {
+    state.grabbed.store(grabbed, Ordering::Relaxed);
+    #[cfg(debug_assertions)]
+    println!("[dp] grabbed={}", grabbed);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -78,8 +158,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             display_index: Mutex::new(0),
+            grabbed: AtomicBool::new(false),
         })
-        .invoke_handler(tauri::generate_handler![set_click_through, place_on_display, get_os])
+        .invoke_handler(tauri::generate_handler![
+            set_click_through,
+            place_on_display,
+            get_os,
+            set_grabbed
+        ])
         .setup(|app| {
             let win = app.get_webview_window("main").expect("main window missing");
             // 데스크톱 위 클릭통과 오버레이 (커서가 캐릭터 위일 때만 프론트가 해제)
@@ -179,14 +265,34 @@ pub fn run() {
                 .build(app)?;
 
             // ── 커서 폴링 → 창-로컬(CSS px) 좌표를 프론트로 emit (클릭통과 토글용) ──
+            // 드래그(잡힘) 중엔 커서가 있는 모니터로 창을 따라 이동시켜 크로스모니터
+            // 드래그를 지원 (main.swift mouseDragged→ensureScreen 과 동일 동작)
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 if let Some(win) = handle.get_webview_window("main") {
-                    if let (Ok(cursor), Ok(wp), Ok(scale)) =
-                        (win.cursor_position(), win.outer_position(), win.scale_factor())
-                    {
-                        let lx = (cursor.x - wp.x as f64) / scale;
-                        let ly = (cursor.y - wp.y as f64) / scale;
+                    let state = handle.state::<AppState>();
+                    if state.grabbed.load(Ordering::Relaxed) {
+                        let ms = sorted_monitors(&win);
+                        if let Some(idx) = monitor_under_cursor(&win, &ms) {
+                            // 락을 fit_to_monitor(메인스레드 대기) 밖에서 짧게만 잡는다
+                            let moved = {
+                                let mut cur = state.display_index.lock().unwrap();
+                                if idx != *cur {
+                                    *cur = idx;
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            if moved {
+                                fit_to_monitor(&win, &ms[idx]);
+                                let _ = win.emit("display-changed", idx);
+                                #[cfg(debug_assertions)]
+                                println!("[dp] drag display -> {}", idx);
+                            }
+                        }
+                    }
+                    if let Some((lx, ly)) = cursor_local(&win) {
                         let _ = win.emit("cursor", (lx, ly));
                     }
                 }
@@ -198,3 +304,4 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+

@@ -42,11 +42,10 @@ const CHARACTER = { name: "waabi", scale: 1.1, smooth: false };
 async function main() {
   const canvas = document.getElementById("pet-canvas") as HTMLCanvasElement;
   const ctx = canvas.getContext("2d")!;
-  const dpr = window.devicePixelRatio || 1;
 
   const frames = await loadCharacter(CHARACTER.name);
   const pet = new Pet(frames, CHARACTER.scale, CHARACTER.smooth);
-  pet.migrate = () => false; // 자동 크로스모니터 이동은 후속 (트레이로 수동 이동 제공)
+  pet.migrate = () => false; // 자동 크로스모니터 이동은 후속 (드래그/트레이로 수동 이동 제공)
 
   if (DEV.danceGap) {
     pet.danceGapMin = DEV.danceGap[0];
@@ -54,6 +53,8 @@ async function main() {
   }
 
   function resize() {
+    // dpr 은 매번 읽는다 — 드래그로 scale 이 다른 모니터로 넘어가면 바뀜
+    const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(window.innerWidth * dpr);
     canvas.height = Math.round(window.innerHeight * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -108,6 +109,9 @@ async function main() {
   let overSprite = false;
   listen<[number, number]>("cursor", (e) => {
     const [lx, ly] = e.payload;
+    // 드래그 중엔 Rust 폴링 좌표로도 위치 갱신 — 창이 다른 모니터로 점프한 직후
+    // pointermove 가 오기 전에도 캐릭터가 커서에 붙어있게 한다
+    if (pet.isGrabbed) pet.dragTo(lx, ly);
     const over = pet.isGrabbed || pet.isOverSprite(lx, ly);
     if (over !== overSprite) {
       overSprite = over;
@@ -116,13 +120,22 @@ async function main() {
   });
 
   // ── 드래그 (클릭통과 해제 상태에서 pointer 이벤트 수신) ──
+  // 잡힘 상태를 Rust 에 알리면 커서 폴링이 커서가 있는 모니터로 창을 옮겨
+  // 드래그로 모니터 간 이동이 된다 (main.swift ensureScreen 포팅)
   canvas.addEventListener("pointerdown", (e) => {
-    if (pet.grabAt(e.clientX, e.clientY)) canvas.setPointerCapture(e.pointerId);
+    if (pet.grabAt(e.clientX, e.clientY)) {
+      canvas.setPointerCapture(e.pointerId);
+      void invoke("set_grabbed", { grabbed: true });
+    }
   });
   canvas.addEventListener("pointermove", (e) => {
     if (pet.isGrabbed) pet.dragTo(e.clientX, e.clientY);
   });
-  const endDrag = () => pet.release();
+  const endDrag = () => {
+    if (!pet.isGrabbed) return;
+    pet.release();
+    void invoke("set_grabbed", { grabbed: false });
+  };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
 
