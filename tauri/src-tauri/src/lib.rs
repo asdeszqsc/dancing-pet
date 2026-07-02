@@ -206,10 +206,11 @@ pub fn run() {
                         (win.outer_position(), win.scale_factor(), win.inner_size())
                     {
                         let rect = platform::dock_rect(
-                            op.x as f64 / scale,
-                            op.y as f64 / scale,
-                            sz.width as f64 / scale,
-                            sz.height as f64 / scale,
+                            op.x as f64,
+                            op.y as f64,
+                            sz.width as f64,
+                            sz.height as f64,
+                            scale,
                         );
                         let _ = win.emit("dock", rect);
                     }

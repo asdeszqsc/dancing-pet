@@ -32,3 +32,7 @@ serde_json = "1"
 objc2 = "0.6"
 core-foundation = "0.10"
 
+# Windows 네이티브: 작업표시줄(Shell_TrayWnd) 감지
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+

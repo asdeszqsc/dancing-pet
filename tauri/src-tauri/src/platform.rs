@@ -1,6 +1,9 @@
 // OS 네이티브 기능 — 오디오 출력 감지, 창 레벨(Dock 위), Dock/작업표시줄 감지.
 // macOS 는 main.swift 의 AudioMonitor / window.level / readDock(AX) 를 포팅.
-// Windows 는 Phase 4 에서 WASAPI / Shell_TrayWnd 로 구현 (그 환경에서 컴파일 검증).
+// Windows 는 Shell_TrayWnd 로 작업표시줄 감지 (오디오 WASAPI 는 TODO).
+//
+// dock_rect 의 win_* 인자는 창의 물리 px (outer_position/inner_size 그대로) + scale.
+// 반환은 창-로컬 CSS px — 각 OS 구현이 자기 좌표계에 맞게 변환한다.
 
 use std::os::raw::c_void;
 
@@ -14,6 +17,48 @@ pub struct DockRect {
 }
 
 const DOCK_FEET_INSET: f64 = 8.0; // main.swift kDockFeetInset — 발을 살짝 박히게
+
+/// 작업표시줄 후보 rect([l,t,r,b] 물리 px, 창과 같은 가상 스크린 좌표)들에서
+/// 이 창의 바닥면(DockRect)을 계산 — Windows 구현의 필터/변환 로직.
+/// OS 독립 순수 함수로 분리해 macOS 에서도 단위테스트한다.
+/// 필터: 이 창(모니터)과 교차 · 가로형 · 창 하단 절반 · 자동숨김(노출 수 px) 제외.
+#[allow(dead_code)]
+fn taskbar_dock_rect(
+    bars: &[[f64; 4]],
+    win_x: f64,
+    win_y: f64,
+    win_w: f64,
+    win_h: f64,
+    scale: f64,
+) -> Option<DockRect> {
+    let (wl, wt, wr, wb) = (win_x, win_y, win_x + win_w, win_y + win_h);
+    let mut best: Option<(f64, f64, f64)> = None; // (left, right, top) 물리
+    for &[l, t, r, b] in bars {
+        if r <= wl || l >= wr || b <= wt || t >= wb {
+            continue; // 이 창(모니터)과 안 겹침 — 옆 모니터의 작업표시줄
+        }
+        if (r - l) < (b - t) {
+            continue; // 좌/우 세로 배치 — 바닥과 무관
+        }
+        if t < wt + win_h * 0.5 {
+            continue; // 상단 배치 — 바닥과 무관
+        }
+        let cand = (l.max(wl), r.min(wr), t);
+        if best.map_or(true, |(_, _, bt)| cand.2 < bt) {
+            best = Some(cand);
+        }
+    }
+    let (l, r, t) = best?;
+    let height_css = (wb - t) / scale;
+    if height_css <= DOCK_FEET_INSET + 4.0 {
+        return None; // 자동 숨김 상태(화면 밖으로 슬라이드) 등 — 바닥 취급 안 함
+    }
+    Some(DockRect {
+        left: (l - win_x) / scale,
+        right: (r - win_x) / scale,
+        top_y: height_css - DOCK_FEET_INSET,
+    })
+}
 
 // ══════════════════════════ macOS ══════════════════════════
 #[cfg(target_os = "macos")]
@@ -256,8 +301,10 @@ mod imp {
         }
     }
 
-    /// 실제 Dock rect → 창-로컬(바닥 기준 CSS px). win_* 는 창의 논리(CSS) 좌표/크기.
-    pub fn dock_rect(win_x: f64, win_y: f64, win_w: f64, win_h: f64) -> Option<DockRect> {
+    /// 실제 Dock rect → 창-로컬(바닥 기준 CSS px). win_* 물리 px 를 논리(포인트)로
+    /// 변환해 AX 프레임(포인트)과 비교한다.
+    pub fn dock_rect(win_x: f64, win_y: f64, win_w: f64, win_h: f64, scale: f64) -> Option<DockRect> {
+        let (win_x, win_y, win_w, win_h) = (win_x / scale, win_y / scale, win_w / scale, win_h / scale);
         unsafe {
             if AXIsProcessTrusted() == 0 {
                 return None; // 접근성 권한 없음
@@ -316,19 +363,141 @@ mod imp {
     }
 }
 
-// ══════════════════════════ 기타 OS (Windows 등) — Phase 4 에서 구현 ══════════════════════════
-#[cfg(not(target_os = "macos"))]
+// ══════════════════════════ Windows ══════════════════════════
+#[cfg(windows)]
+mod imp {
+    use super::*;
+    use windows_sys::Win32::Foundation::{HWND, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowExW, FindWindowW, GetWindowRect, IsWindowVisible,
+    };
+
+    pub fn audio_output_active() -> bool {
+        false // TODO: WASAPI IAudioMeterInformation::GetPeakValue
+    }
+    pub fn raise_above_dock(_ns_window: *mut c_void) {}
+    pub fn prompt_accessibility() {}
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// 작업표시줄(주: Shell_TrayWnd, 보조 모니터: Shell_SecondaryTrayWnd) rect 수집
+    /// → taskbar_dock_rect 로 필터/변환. GetWindowRect 는 가상 스크린 물리 px
+    /// (per-monitor DPI aware 프로세스) — 창 outer_position 과 같은 좌표계.
+    pub fn dock_rect(win_x: f64, win_y: f64, win_w: f64, win_h: f64, scale: f64) -> Option<DockRect> {
+        let mut bars: Vec<[f64; 4]> = Vec::new();
+        let mut push = |hwnd: HWND| unsafe {
+            if hwnd.is_null() || IsWindowVisible(hwnd) == 0 {
+                return;
+            }
+            let mut r = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            if GetWindowRect(hwnd, &mut r) != 0 {
+                bars.push([r.left as f64, r.top as f64, r.right as f64, r.bottom as f64]);
+            }
+        };
+        unsafe {
+            let primary = wide("Shell_TrayWnd");
+            push(FindWindowW(primary.as_ptr(), std::ptr::null()));
+            let secondary = wide("Shell_SecondaryTrayWnd");
+            let mut h: HWND = std::ptr::null_mut();
+            loop {
+                h = FindWindowExW(std::ptr::null_mut(), h, secondary.as_ptr(), std::ptr::null());
+                if h.is_null() {
+                    break;
+                }
+                push(h);
+            }
+        }
+        taskbar_dock_rect(&bars, win_x, win_y, win_w, win_h, scale)
+    }
+}
+
+// ══════════════════════════ 기타 OS (Linux 등) ══════════════════════════
+#[cfg(not(any(target_os = "macos", windows)))]
 mod imp {
     use super::*;
 
     pub fn audio_output_active() -> bool {
-        false // TODO(Phase 4): Windows WASAPI IAudioMeterInformation::GetPeakValue
+        false
     }
     pub fn raise_above_dock(_ns_window: *mut c_void) {}
     pub fn prompt_accessibility() {}
-    pub fn dock_rect(_x: f64, _y: f64, _w: f64, _h: f64) -> Option<DockRect> {
-        None // TODO(Phase 4): Windows Shell_TrayWnd rect
+    pub fn dock_rect(_x: f64, _y: f64, _w: f64, _h: f64, _scale: f64) -> Option<DockRect> {
+        None
     }
 }
 
 pub use imp::{audio_output_active, dock_rect, prompt_accessibility, raise_above_dock};
+
+// ══════════════════════════ 테스트 (taskbar_dock_rect 는 OS 독립) ══════════════════════════
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 1920x1080 모니터(가상 스크린 원점), 48px 작업표시줄, 100% 스케일
+    #[test]
+    fn bottom_taskbar_100pct() {
+        let r = taskbar_dock_rect(&[[0.0, 1032.0, 1920.0, 1080.0]], 0.0, 0.0, 1920.0, 1080.0, 1.0)
+            .expect("bottom taskbar should be detected");
+        assert_eq!(r.left, 0.0);
+        assert_eq!(r.right, 1920.0);
+        assert!((r.top_y - (48.0 - DOCK_FEET_INSET)).abs() < 0.01);
+    }
+
+    // 150% 스케일: 물리 2880x1620 (논리 1920x1080), 작업표시줄 물리 72px → CSS 48px
+    #[test]
+    fn bottom_taskbar_150pct() {
+        let r = taskbar_dock_rect(&[[0.0, 1548.0, 2880.0, 1620.0]], 0.0, 0.0, 2880.0, 1620.0, 1.5)
+            .expect("scaled taskbar should be detected");
+        assert!((r.top_y - (48.0 - DOCK_FEET_INSET)).abs() < 0.01);
+        assert!((r.right - 1920.0).abs() < 0.01);
+    }
+
+    // 두 번째 모니터(창이 x=1920..3840)에서 보조 작업표시줄 감지 — 창-로컬 좌표로 변환
+    #[test]
+    fn secondary_monitor_taskbar() {
+        let r = taskbar_dock_rect(
+            &[[1920.0, 1032.0, 3840.0, 1080.0]],
+            1920.0, 0.0, 1920.0, 1080.0, 1.0,
+        )
+        .expect("secondary taskbar should be detected");
+        assert_eq!(r.left, 0.0);
+        assert_eq!(r.right, 1920.0);
+    }
+
+    #[test]
+    fn top_taskbar_ignored() {
+        assert!(taskbar_dock_rect(&[[0.0, 0.0, 1920.0, 48.0]], 0.0, 0.0, 1920.0, 1080.0, 1.0).is_none());
+    }
+
+    #[test]
+    fn vertical_taskbar_ignored() {
+        assert!(taskbar_dock_rect(&[[0.0, 0.0, 62.0, 1080.0]], 0.0, 0.0, 1920.0, 1080.0, 1.0).is_none());
+    }
+
+    // 옆 모니터의 작업표시줄은 이 창과 안 겹치므로 무시
+    #[test]
+    fn other_monitor_bar_ignored() {
+        assert!(taskbar_dock_rect(
+            &[[1920.0, 1032.0, 3840.0, 1080.0]],
+            0.0, 0.0, 1920.0, 1080.0, 1.0
+        )
+        .is_none());
+    }
+
+    // 자동 숨김(화면 밖으로 슬라이드, 2px 노출)은 바닥 취급 안 함
+    #[test]
+    fn autohidden_taskbar_ignored() {
+        assert!(taskbar_dock_rect(
+            &[[0.0, 1078.0, 1920.0, 1080.0]],
+            0.0, 0.0, 1920.0, 1080.0, 1.0
+        )
+        .is_none());
+    }
+}

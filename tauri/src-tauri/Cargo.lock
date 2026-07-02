@@ -3567,6 +3567,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-store",
  "tauri-plugin-updater",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
