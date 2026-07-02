@@ -77,3 +77,31 @@ jobs:
             tauri/src-tauri/target/**/release/bundle/**/*.app
             tauri/src-tauri/target/**/release/bundle/**/*.msi
             tauri/src-tauri/target/**/release/bundle/**/*-setup.exe
+
+  # 태그 릴리스 발행 후 Homebrew tap(asdeszqsc/homebrew-tap) cask 를 새 버전으로
+  # 자동 갱신 → macOS 유저는 `brew upgrade --cask dancing-pet` 로 업데이트.
+  # TAP_GITHUB_TOKEN: homebrew-tap 에 push 가능한 토큰 (기본 GITHUB_TOKEN 은 이 repo 전용)
+  brew:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bump cask version/sha256
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG="DancingPet_${VERSION}_universal.dmg"
+          curl -fsSL -o "$DMG" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${DMG}"
+          SHA="$(sha256sum "$DMG" | cut -d' ' -f1)"
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/asdeszqsc/homebrew-tap.git" tap
+          cd tap
+          sed -i -E "s|^  version \".*\"|  version \"${VERSION}\"|" Casks/dancing-pet.rb
+          sed -i -E "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" Casks/dancing-pet.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "dancing-pet ${VERSION}"
+          git push

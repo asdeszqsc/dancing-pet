@@ -6,26 +6,33 @@ import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import { loadCharacter } from "./assets";
 import { Pet, FPS, FLOOR_Y } from "./pet";
 import { render, drawDockBand } from "./render";
 
-// 자동 업데이트 — Windows 에서만, 시작 시 체크 → 확인창 → 설치 → 재시작.
-// (macOS 는 Homebrew cask 로 업데이트하므로 제외)
+// 자동 업데이트 — 시작 시 새 버전 확인.
+// Windows: 확인창 → 설치 → 재시작. macOS: 자동 설치 없이 Homebrew 업데이트 안내만.
 async function checkForUpdate() {
   try {
     const os = await invoke<string>("get_os");
-    if (os !== "windows") return;
+    if (os !== "windows" && os !== "macos") return;
     const update = await check();
     if (!update) return;
-    const yes = await ask(
-      `새 버전 ${update.version} 이(가) 있어요.\n지금 설치할까요? (설치 후 자동 재시작)`,
-      { title: "DancingPet 업데이트", kind: "info" }
-    );
-    if (!yes) return;
-    await update.downloadAndInstall();
-    await relaunch();
+    if (os === "windows") {
+      const yes = await ask(
+        `새 버전 ${update.version} 이(가) 있어요.\n지금 설치할까요? (설치 후 자동 재시작)`,
+        { title: "DancingPet 업데이트", kind: "info" }
+      );
+      if (!yes) return;
+      await update.downloadAndInstall();
+      await relaunch();
+    } else {
+      await message(
+        `새 버전 ${update.version} 이(가) 있어요.\n\n터미널에서 업데이트해 주세요:\n  brew upgrade --cask dancing-pet\n\n(직접 설치했다면 GitHub 릴리스에서 새 .dmg 를 받아 주세요)`,
+        { title: "DancingPet 업데이트", kind: "info" }
+      );
+    }
   } catch (e) {
     console.error("업데이트 확인 실패:", e);
   }
