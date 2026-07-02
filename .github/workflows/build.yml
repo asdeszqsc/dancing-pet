@@ -3,7 +3,16 @@ name: build
 on:
   push:
     tags: ["v*"]
+    # main push 는 컴파일 검증 + Rust 캐시 웜업 (릴리스 발행은 태그일 때만).
+    # GitHub 캐시는 "자기 ref + 기본 브랜치" 것만 복원 가능 → 태그 릴리스 빌드가
+    # 빨라지려면 main 에 캐시가 있어야 한다.
+    branches: ["main"]
   workflow_dispatch:
+
+# 같은 브랜치의 연속 push 는 이전 빌드 취소 (태그/릴리스 런은 취소 안 함)
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
@@ -35,6 +44,8 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: tauri/src-tauri
+          # 태그 ref 에 저장된 캐시는 이후 어떤 런도 복원 못 하므로 저장 생략
+          save-if: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
       - name: Install frontend deps
         working-directory: tauri

@@ -33,7 +33,8 @@ git push origin <branch> --tags
 ## 파이프라인
 
 - 정의: [`.github/workflows/build.yml`](.github/workflows/build.yml)
-- 트리거: `v*` 태그 push (릴리스 발행) / `workflow_dispatch`(수동, 빌드만)
+- 트리거: `v*` 태그 push (릴리스 발행) / `main` push (빌드만 — 컴파일 검증 + Rust 캐시 웜업) / `workflow_dispatch`(수동, 빌드만)
+- 캐시: GitHub Actions 캐시는 "자기 ref + 기본 브랜치" 것만 복원 가능 → 태그 릴리스 빌드는 **main 의 캐시**를 재사용한다. main 에 한동안 push 가 없어 캐시가 만료(7일)되면 첫 빌드는 다시 콜드(~10분).
 - 매트릭스:
   - `macos-latest` → `--target universal-apple-darwin` (Intel+ARM)
   - `windows-latest` → 기본 (x64)
