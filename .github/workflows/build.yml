@@ -85,6 +85,22 @@ jobs:
           releaseDraft: false
           args: ${{ matrix.args }}
 
+      # ad-hoc 서명의 designated requirement 가 identifier 고정형인지 검증
+      # (깨지면 brew upgrade 마다 손쉬운 사용 권한이 무효화됨 — scripts/macos-adhoc-sign.sh)
+      - name: Verify macOS signature (stable TCC identity)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          set -euo pipefail
+          EXE="tauri/src-tauri/target/universal-apple-darwin/release/bundle/macos/DancingPet.app/Contents/MacOS/tauri"
+          codesign -d -r- "$EXE" 2>&1 | tee /dev/stderr | \
+            grep -qF 'designated => identifier "com.dancingpet.app"'
+          # 번들 통째 서명이 아니라(리소스 seal 없음) 번들 컨텍스트 --verify 는 항상
+          # 실패한다 — 바이너리를 밖으로 복사해 단독 Mach-O 로 서명·요구사항 검증.
+          cp "$EXE" "$RUNNER_TEMP/dancingpet-exe"
+          codesign --verify \
+            --test-requirement='=identifier "com.dancingpet.app"' \
+            "$RUNNER_TEMP/dancingpet-exe"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

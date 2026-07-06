@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeBundleCommand": "bash scripts/macos-adhoc-sign.sh"
+  }
+}
